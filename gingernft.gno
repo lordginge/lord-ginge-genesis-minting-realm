@@ -28,7 +28,7 @@ func init(cur realm) {
 }
 
 // Mint creates a new NFT owned by the caller.
-// metadataURI must be a URI pointing at the token's metadata JSON 
+// metadataURI must be a URI pointing at the token's metadata JSON —
 // typically data:application/json;base64,... produced by the minting UI
 // (max 300k chars). Plain https:// or ipfs:// URIs also work.
 // Returns the new token ID.
@@ -102,12 +102,12 @@ func GetTokenURI(tid string) (string, error)    { return nft.TokenURI(TokenID(ti
 // this page shows IDs and owners, with a hint per token.
 func Render(path string) string {
 	if path != "" {
-		return "404 \u2014 try the home page."
+		return "404 — try the home page."
 	}
 	var sb strings.Builder
 	sb.WriteString("# Lord Ginge Genesis\n\n")
-	sb.WriteString(ufmt.Sprintf("Open-mint GRC721 collection \u00b7 **%d minted**\n\n", nft.TokenCount()))
-	sb.WriteString("Mint by calling `Mint(metadataURI)` \u2014 the NFT goes straight to your own wallet.\n")
+	sb.WriteString(ufmt.Sprintf("Open-mint GRC721 collection · **%d minted**\n\n", nft.TokenCount()))
+	sb.WriteString("Mint by calling `Mint(metadataURI)` — the NFT goes straight to your own wallet.\n")
 	sb.WriteString("Metadata is stored in each token's URI as `data:application/json;base64,...`.\n\n")
 	var i int64
 	for i = 1; i <= nft.TokenCount(); i++ {
@@ -116,7 +116,7 @@ func Render(path string) string {
 		if err != nil {
 			continue
 		}
-		sb.WriteString(ufmt.Sprintf("- **#%s** \u2014 owner `%s`\n", tid, owner.String()))
+		sb.WriteString(ufmt.Sprintf("- **#%s** — owner `%s`\n", tid, owner.String()))
 	}
 	return sb.String()
 }
