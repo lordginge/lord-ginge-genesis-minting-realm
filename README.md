@@ -11,7 +11,7 @@ identical to the live topaz version; only the network and namespace differ.
 
 ## Easiest deploy: the UI
 
-Open the beta mainnet page (`ui/beta.html`), connect Adena, and press
+Open the hosted Lord Ginge Genesis beta mainnet page, connect Adena, and press
 **Deploy collection to beta mainnet**. The page sends one `/vm.m_addpkg` transaction
 with all six files embedded, a 6 GNOT storage deposit, and a 1 GNOT gas fee. It then
 polls the chain until the realm answers and unlocks minting.
