@@ -19,6 +19,25 @@ polls the chain until the realm answers and unlocks minting.
 The deploy must come from wallet `g1n500fmqx8m6tgts85kmn43htegkv0eewkdm4lg`, because
 namespaces are permissioned: only that address can publish under `r/g1n500…/`.
 
+## Deploying from your own UI: two Adena traps
+
+Verified against Adena's encoder and the production deploy flow of
+[samouraiworld/memba](https://github.com/samouraiworld/memba):
+
+1. **`/vm.m_addpkg` has no `deposit` field.** Its proto fields are `creator`,
+   `package`, `send`, `max_deposit`. If you send a `deposit` field, Adena's
+   `encodeMessageValue` silently drops it, the VM falls back to the chain's tiny
+   default deposit, and simulation fails with "not enough deposit to cover the
+   storage usage", which Adena surfaces only as a generic **"Failed to estimate
+   gas"** with fee `0` and gas `2200000000`. Always use
+   `send: ""` + `max_deposit: "6000000ugnot"` for a package of this size.
+
+2. **Pass explicit gas, never rely on estimation.** Call
+   `adena.DoContract({ messages, gasFee: 1000000, gasWanted: 40000000, memo })`.
+   With `gasWanted` set, the wallet skips the `.app/simulate` estimation path, so
+   the zero-fee failure state cannot occur. Mint calls on this realm are fine at
+   `gasWanted: 10000000` with `max_deposit: "3000000ugnot"`.
+
 ## CLI alternative (gnokey)
 
 ```
