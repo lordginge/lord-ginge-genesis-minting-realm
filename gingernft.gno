@@ -14,6 +14,7 @@
 package gingernft
 
 import (
+	"chain/runtime"
 	"errors"
 	"strconv"
 	"strings"
@@ -21,66 +22,64 @@ import (
 	"gno.land/p/nt/ufmt/v0"
 )
 
-var nft *BasicNFT
-
-func init(cur realm) {
-	nft = NewBasicNFT(0, cur, "Lord Ginge Genesis", "GINGE")
-}
+var nft = NewBasicNFT("Lord Ginge Genesis", "GINGE")
 
 // Mint creates a new NFT owned by the caller.
 // metadataURI must be a URI pointing at the token's metadata JSON —
 // typically data:application/json;base64,... produced by the minting UI
 // (max 300k chars). Plain https:// or ipfs:// URIs also work.
 // Returns the new token ID.
-func Mint(cur realm, metadataURI string) string {
-	require(cur.Previous().IsUser(), "Mint from a user wallet only, no intermediary realms.")
-	caller := cur.Previous().Address()
+func Mint(_ realm, metadataURI string) string {
+	prev := runtime.PreviousRealm()
+	require(prev.IsUser(), "Mint from a user wallet only, no intermediary realms.")
+	caller := prev.Address()
 	require(metadataURI != "", "metadataURI is required.")
-	require(len(metadataURI) <= 300_000, "metadataURI too long (max 300000 chars).")
+	require(len(metadataURI) <= 300000, "metadataURI too long (max 300000 chars).")
 
 	tid := TokenID(strconv.FormatInt(nft.TokenCount()+1, 10))
 	checkErr(nft.Mint(caller, tid))
-	_, err := nft.SetTokenURI(caller, tid, TokenURI(metadataURI))
+	_, err := nft.SetTokenURI(tid, TokenURI(metadataURI))
 	checkErr(err)
 	return tid.String()
 }
 
-// --- write wrappers (GRC721 caller-validation pattern) ---
+// --- write wrappers ---
 
 // TransferFrom moves a token; caller must be owner or approved.
-func TransferFrom(cur realm, from, to address, tid string) error {
-	require(cur.Previous().IsUser(), "user wallets only")
-	return nft.TransferFrom(cur.Previous().Address(), from, to, TokenID(tid))
+func TransferFrom(_ realm, from, to address, tid string) error {
+	require(runtime.PreviousRealm().IsUser(), "user wallets only")
+	return nft.TransferFrom(from, to, TokenID(tid))
 }
 
 // Approve approves another address to move a token.
-func Approve(cur realm, to address, tid string) error {
-	require(cur.Previous().IsUser(), "user wallets only")
-	return nft.Approve(cur.Previous().Address(), to, TokenID(tid))
+func Approve(_ realm, to address, tid string) error {
+	require(runtime.PreviousRealm().IsUser(), "user wallets only")
+	return nft.Approve(to, TokenID(tid))
 }
 
 // SetApprovalForAll approves or revokes an operator for all caller's tokens.
-func SetApprovalForAll(cur realm, operator address, approved bool) error {
-	require(cur.Previous().IsUser(), "user wallets only")
-	return nft.SetApprovalForAll(cur.Previous().Address(), operator, approved)
+func SetApprovalForAll(_ realm, operator address, approved bool) error {
+	require(runtime.PreviousRealm().IsUser(), "user wallets only")
+	return nft.SetApprovalForAll(operator, approved)
 }
 
 // SetTokenURI updates a token's metadata URI. Owner only.
-func SetTokenURI(cur realm, tid, metadataURI string) error {
-	require(cur.Previous().IsUser(), "user wallets only")
-	require(len(metadataURI) <= 300_000, "metadataURI too long (max 300000 chars).")
-	_, err := nft.SetTokenURI(cur.Previous().Address(), TokenID(tid), TokenURI(metadataURI))
+func SetTokenURI(_ realm, tid, metadataURI string) error {
+	require(runtime.PreviousRealm().IsUser(), "user wallets only")
+	require(len(metadataURI) <= 300000, "metadataURI too long (max 300000 chars).")
+	_, err := nft.SetTokenURI(TokenID(tid), TokenURI(metadataURI))
 	return err
 }
 
 // Burn destroys a token the caller owns.
-func Burn(cur realm, tid string) error {
-	require(cur.Previous().IsUser(), "user wallets only")
+func Burn(_ realm, tid string) error {
+	prev := runtime.PreviousRealm()
+	require(prev.IsUser(), "user wallets only")
 	owner, err := nft.OwnerOf(TokenID(tid))
 	if err != nil {
 		return err
 	}
-	if owner != cur.Previous().Address() {
+	if owner != prev.Address() {
 		return errors.New("only the token owner can burn it")
 	}
 	return nft.Burn(TokenID(tid))
@@ -94,7 +93,7 @@ func TokenCount() int64 { return nft.TokenCount() }
 
 func BalanceOf(owner address) (int64, error) { return nft.BalanceOf(owner) }
 func OwnerOf(tid string) (address, error)    { return nft.OwnerOf(TokenID(tid)) }
-func GetTokenURI(tid string) (string, error)    { return nft.TokenURI(TokenID(tid)) }
+func GetTokenURI(tid string) (string, error) { return nft.TokenURI(TokenID(tid)) }
 
 // --- gnoweb page ---
 
