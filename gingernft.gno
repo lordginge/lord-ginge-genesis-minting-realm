@@ -8,6 +8,8 @@
 //     artwork to the caller. Each wallet can hold at most one token from
 //     this collection, so nobody can drain a drop.
 //   - Only a token's owner can change its URI, move it, or burn it.
+//   - Only the owner can clean up old artwork (RemoveArtwork), which
+//     releases its storage deposit; the refund goes to the owner.
 //   - The owner wallet gets no special power over minted tokens.
 //
 // Each token's metadata is stored as its TokenURI following the standard
@@ -69,6 +71,30 @@ func SetCurrent(_ realm, idx int64) error {
 		return errors.New("no artwork with that index")
 	}
 	currentIdx = idx
+	return nil
+}
+
+// RemoveArtwork deletes artwork idx from storage and releases its locked
+// storage deposit. The chain automatically refunds the freed deposit to
+// the transaction caller, and only the owner wallet can call this, so the
+// refund can only ever go to the owner. Owner wallet only.
+// The current artwork cannot be removed (switch it first with SetCurrent).
+// Minted tokens keep their own copy of the metadata, so removing an
+// artwork never affects NFTs that already exist.
+func RemoveArtwork(_ realm, idx int64) error {
+	prev := runtime.PreviousRealm()
+	require(prev.IsUser(), "user wallets only")
+	if prev.Address() != ownerAddr {
+		return errors.New("only the collection owner can remove artwork")
+	}
+	if idx == currentIdx {
+		return errors.New("cannot remove the current artwork; switch it first with SetCurrent")
+	}
+	key := strconv.FormatInt(idx, 10)
+	if !artworks.Has(key) {
+		return errors.New("no artwork with that index")
+	}
+	artworks.Remove(key)
 	return nil
 }
 
