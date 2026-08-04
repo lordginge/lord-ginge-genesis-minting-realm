@@ -1,16 +1,21 @@
-// Package gingernft is the Lord Ginge Genesis open-mint GRC721 collection on gno.land.
-// Anyone can mint an NFT to their own wallet. Each token's metadata is
-// stored as its TokenURI following the standard GRC721/OpenSea pattern:
-// a data:application/json;base64,... URI containing a metadata document
-// {name, description, image, attributes}. The image itself is usually a
-// data:image/...;base64 URI inside that JSON, which makes the whole NFT
-// (art + metadata) live fully on-chain with no IPFS or server.
+// Package gingernft is the Lord Ginge Genesis GRC721 collection on gno.land.
 //
-// Safety rules:
-//   - Minting goes to the caller's own wallet only.
+// Access model:
+//   - The collection has ONE owner wallet (the deployer, hardcoded below).
+//   - Only the owner can add artwork to the collection (AddArtwork).
+//     The most recently added artwork is the CURRENT one.
+//   - Any wallet can call Mint with no arguments: it mints the CURRENT
+//     artwork to the caller. Each wallet can hold at most one token from
+//     this collection, so nobody can drain a drop.
 //   - Only a token's owner can change its URI, move it, or burn it.
-//   - There is no admin, no owner withdrawal, and no way to take tokens
-//     that aren't yours.
+//   - The owner wallet gets no special power over minted tokens.
+//
+// Each token's metadata is stored as its TokenURI following the standard
+// GRC721/OpenSea pattern: a data:application/json;base64,... URI containing
+// a metadata document {name, description, image, attributes}. The image
+// itself is usually a data:image/...;base64 URI inside that JSON, which
+// makes the whole NFT (art + metadata) live fully on-chain with no IPFS
+// or server.
 package gingernft
 
 import (
@@ -19,27 +24,79 @@ import (
 	"strconv"
 	"strings"
 
+	"gno.land/p/nt/avl/v0"
 	"gno.land/p/nt/ufmt/v0"
 )
 
+// ownerAddr is the only wallet allowed to add artwork to the collection.
+var ownerAddr = address("g1n500fmqx8m6tgts85kmn43htegkv0eewkdm4lg")
+
 var nft = NewBasicNFT("Lord Ginge Genesis", "GINGE")
 
-// Mint creates a new NFT owned by the caller.
-// metadataURI must be a URI pointing at the token's metadata JSON —
-// typically data:application/json;base64,... produced by the minting UI
-// (max 300k chars). Plain https:// or ipfs:// URIs also work.
-// Returns the new token ID.
-func Mint(_ realm, metadataURI string) string {
+// artworks holds every artwork the owner has ever added, keyed by its
+// 1-based index as a string. currentIdx points at the artwork Mint uses.
+var artworks avl.Tree
+var artworkCount int64
+var currentIdx int64
+
+// --- owner only ---
+
+// AddArtwork adds a metadata URI to the collection and makes it the
+// current artwork. Owner wallet only. Returns the artwork index.
+// metadataURI is typically data:application/json;base64,... produced by
+// the minting UI (max 300k chars). Plain https:// or ipfs:// URIs work too.
+func AddArtwork(_ realm, metadataURI string) int64 {
 	prev := runtime.PreviousRealm()
-	require(prev.IsUser(), "Mint from a user wallet only, no intermediary realms.")
-	caller := prev.Address()
+	require(prev.IsUser(), "AddArtwork from a user wallet only, no intermediary realms.")
+	require(prev.Address() == ownerAddr, "only the collection owner can add artwork.")
 	require(metadataURI != "", "metadataURI is required.")
 	require(len(metadataURI) <= 300000, "metadataURI too long (max 300000 chars).")
 
+	artworkCount++
+	artworks.Set(strconv.FormatInt(artworkCount, 10), metadataURI)
+	currentIdx = artworkCount
+	return artworkCount
+}
+
+// SetCurrent switches which artwork Mint hands out. Owner wallet only.
+func SetCurrent(_ realm, idx int64) error {
+	prev := runtime.PreviousRealm()
+	require(prev.IsUser(), "user wallets only")
+	if prev.Address() != ownerAddr {
+		return errors.New("only the collection owner can set the current artwork")
+	}
+	if idx < 1 || idx > artworkCount {
+		return errors.New("no artwork with that index")
+	}
+	currentIdx = idx
+	return nil
+}
+
+// --- public mint ---
+
+// Mint mints the CURRENT artwork to the caller's wallet. No arguments:
+// minters cannot choose or supply metadata, they receive the artwork the
+// owner has made current. One token per wallet.
+// Returns the new token ID.
+func Mint(_ realm) string {
+	prev := runtime.PreviousRealm()
+	require(prev.IsUser(), "Mint from a user wallet only, no intermediary realms.")
+	caller := prev.Address()
+	require(currentIdx > 0, "no artwork available yet.")
+
+	bal, err := nft.BalanceOf(caller)
+	checkErr(err)
+	require(bal == 0, "this wallet already holds a Lord Ginge Genesis NFT (one per wallet).")
+
+	v, found := artworks.Get(strconv.FormatInt(currentIdx, 10))
+	require(found, "current artwork missing.")
+	metadataURI, ok := v.(string)
+	require(ok, "corrupt artwork entry.")
+
 	tid := TokenID(strconv.FormatInt(nft.TokenCount()+1, 10))
 	checkErr(nft.Mint(caller, tid))
-	_, err := nft.SetTokenURI(tid, TokenURI(metadataURI))
-	checkErr(err)
+	_, serr := nft.SetTokenURI(tid, TokenURI(metadataURI))
+	checkErr(serr)
 	return tid.String()
 }
 
@@ -63,7 +120,7 @@ func SetApprovalForAll(_ realm, operator address, approved bool) error {
 	return nft.SetApprovalForAll(operator, approved)
 }
 
-// SetTokenURI updates a token's metadata URI. Owner only.
+// SetTokenURI updates a token's metadata URI. Token owner only.
 func SetTokenURI(_ realm, tid, metadataURI string) error {
 	require(runtime.PreviousRealm().IsUser(), "user wallets only")
 	require(len(metadataURI) <= 300000, "metadataURI too long (max 300000 chars).")
@@ -95,6 +152,22 @@ func BalanceOf(owner address) (int64, error) { return nft.BalanceOf(owner) }
 func OwnerOf(tid string) (address, error)    { return nft.OwnerOf(TokenID(tid)) }
 func GetTokenURI(tid string) (string, error) { return nft.TokenURI(TokenID(tid)) }
 
+// ArtworkCount is how many artworks the owner has added.
+func ArtworkCount() int64 { return artworkCount }
+
+// CurrentArtwork is the index Mint currently hands out (0 = none yet).
+func CurrentArtwork() int64 { return currentIdx }
+
+// GetArtworkURI returns the metadata URI of artwork idx.
+func GetArtworkURI(idx int64) (string, bool) {
+	v, found := artworks.Get(strconv.FormatInt(idx, 10))
+	if !found {
+		return "", false
+	}
+	s, ok := v.(string)
+	return s, ok
+}
+
 // --- gnoweb page ---
 
 // Render lists minted tokens. Metadata JSON lives in each TokenURI;
@@ -105,9 +178,10 @@ func Render(path string) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("# Lord Ginge Genesis\n\n")
-	sb.WriteString(ufmt.Sprintf("Open-mint GRC721 collection · **%d minted**\n\n", nft.TokenCount()))
-	sb.WriteString("Mint by calling `Mint(metadataURI)` — the NFT goes straight to your own wallet.\n")
-	sb.WriteString("Metadata is stored in each token's URI as `data:application/json;base64,...`.\n\n")
+	sb.WriteString(ufmt.Sprintf("GRC721 collection · **%d minted** · artwork #%d of %d live\n\n",
+		nft.TokenCount(), currentIdx, artworkCount))
+	sb.WriteString("Mint by calling `Mint()` — the current artwork goes straight to your own wallet. One per wallet.\n")
+	sb.WriteString("Only the owner wallet can add artwork (`AddArtwork`) or switch the drop (`SetCurrent`).\n\n")
 	var i int64
 	for i = 1; i <= nft.TokenCount(); i++ {
 		tid := strconv.FormatInt(i, 10)
