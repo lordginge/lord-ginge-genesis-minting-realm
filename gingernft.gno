@@ -3,13 +3,14 @@
 // Access model:
 //   - The collection has ONE owner wallet (the deployer, hardcoded below).
 //   - Only the owner can add artwork to the collection (AddArtwork).
-//     The most recently added artwork is the CURRENT one.
-//   - Any wallet can call Mint with no arguments: it mints the CURRENT
-//     artwork to the caller. Each wallet can hold at most one token from
-//     this collection, so nobody can drain a drop.
-//   - Only a token's owner can change its URI, move it, or burn it.
+//   - Any wallet can call Mint with no arguments while minting is open:
+//     it mints a RANDOM artwork from the pool to the caller. Each wallet
+//     can hold at most one token, so nobody can drain a drop.
+//   - Only the owner can end minting (EndMint). It is permanent: once
+//     closed, no more tokens can ever be minted. Scarcity is final.
 //   - Only the owner can clean up old artwork (RemoveArtwork), which
 //     releases its storage deposit; the refund goes to the owner.
+//   - Only a token's owner can change its URI, move it, or burn it.
 //   - The owner wallet gets no special power over minted tokens.
 //
 // Each token's metadata is stored as its TokenURI following the standard
@@ -18,10 +19,17 @@
 // itself is usually a data:image/...;base64 URI inside that JSON, which
 // makes the whole NFT (art + metadata) live fully on-chain with no IPFS
 // or server.
+//
+// Randomness note: the pick is a deterministic hash of chain height,
+// caller address and supply. It is unpredictable enough for a fair drop,
+// but it is not cryptographic randomness; a validator could in theory
+// grind it. For a one-per-wallet community mint this is the standard
+// on-chain tradeoff.
 package gingernft
 
 import (
 	"chain/runtime"
+	"crypto/sha256"
 	"errors"
 	"strconv"
 	"strings"
@@ -30,21 +38,23 @@ import (
 	"gno.land/p/nt/ufmt/v0"
 )
 
-// ownerAddr is the only wallet allowed to add artwork to the collection.
+// ownerAddr is the only wallet allowed to manage the collection.
 var ownerAddr = address("g1n500fmqx8m6tgts85kmn43htegkv0eewkdm4lg")
 
 var nft = NewBasicNFT("Lord Ginge Genesis", "GINGE")
 
-// artworks holds every artwork the owner has ever added, keyed by its
-// 1-based index as a string. currentIdx points at the artwork Mint uses.
+// artworks holds every artwork in the pool, keyed by its 1-based index
+// as a string. Mint picks one at random.
 var artworks avl.Tree
 var artworkCount int64
-var currentIdx int64
+
+// mintOpen starts true; EndMint flips it false forever.
+var mintOpen = true
 
 // --- owner only ---
 
-// AddArtwork adds a metadata URI to the collection and makes it the
-// current artwork. Owner wallet only. Returns the artwork index.
+// AddArtwork adds a metadata URI to the mint pool. Owner wallet only.
+// Returns the artwork index.
 // metadataURI is typically data:application/json;base64,... produced by
 // the minting UI (max 300k chars). Plain https:// or ipfs:// URIs work too.
 func AddArtwork(_ realm, metadataURI string) int64 {
@@ -56,29 +66,28 @@ func AddArtwork(_ realm, metadataURI string) int64 {
 
 	artworkCount++
 	artworks.Set(strconv.FormatInt(artworkCount, 10), metadataURI)
-	currentIdx = artworkCount
 	return artworkCount
 }
 
-// SetCurrent switches which artwork Mint hands out. Owner wallet only.
-func SetCurrent(_ realm, idx int64) error {
+// EndMint permanently closes the collection: no more tokens can ever be
+// minted after this call. Owner wallet only. One-way, cannot be undone.
+func EndMint(_ realm) error {
 	prev := runtime.PreviousRealm()
 	require(prev.IsUser(), "user wallets only")
 	if prev.Address() != ownerAddr {
-		return errors.New("only the collection owner can set the current artwork")
+		return errors.New("only the collection owner can end minting")
 	}
-	if idx < 1 || idx > artworkCount {
-		return errors.New("no artwork with that index")
+	if !mintOpen {
+		return errors.New("minting is already closed")
 	}
-	currentIdx = idx
+	mintOpen = false
 	return nil
 }
 
-// RemoveArtwork deletes artwork idx from storage and releases its locked
+// RemoveArtwork deletes artwork idx from the pool and releases its locked
 // storage deposit. The chain automatically refunds the freed deposit to
 // the transaction caller, and only the owner wallet can call this, so the
 // refund can only ever go to the owner. Owner wallet only.
-// The current artwork cannot be removed (switch it first with SetCurrent).
 // Minted tokens keep their own copy of the metadata, so removing an
 // artwork never affects NFTs that already exist.
 func RemoveArtwork(_ realm, idx int64) error {
@@ -86,9 +95,6 @@ func RemoveArtwork(_ realm, idx int64) error {
 	require(prev.IsUser(), "user wallets only")
 	if prev.Address() != ownerAddr {
 		return errors.New("only the collection owner can remove artwork")
-	}
-	if idx == currentIdx {
-		return errors.New("cannot remove the current artwork; switch it first with SetCurrent")
 	}
 	key := strconv.FormatInt(idx, 10)
 	if !artworks.Has(key) {
@@ -100,22 +106,24 @@ func RemoveArtwork(_ realm, idx int64) error {
 
 // --- public mint ---
 
-// Mint mints the CURRENT artwork to the caller's wallet. No arguments:
-// minters cannot choose or supply metadata, they receive the artwork the
-// owner has made current. One token per wallet.
+// Mint mints a RANDOM artwork from the pool to the caller's wallet.
+// No arguments: minters cannot choose or supply metadata. One token per
+// wallet. Fails permanently once the owner has ended minting.
 // Returns the new token ID.
 func Mint(_ realm) string {
 	prev := runtime.PreviousRealm()
 	require(prev.IsUser(), "Mint from a user wallet only, no intermediary realms.")
 	caller := prev.Address()
-	require(currentIdx > 0, "no artwork available yet.")
+	require(mintOpen, "minting is closed forever.")
+	require(artworkCount > 0, "no artwork available yet.")
 
 	bal, err := nft.BalanceOf(caller)
 	checkErr(err)
 	require(bal == 0, "this wallet already holds a Lord Ginge Genesis NFT (one per wallet).")
 
-	v, found := artworks.Get(strconv.FormatInt(currentIdx, 10))
-	require(found, "current artwork missing.")
+	idx := pickArtwork(caller)
+	v, found := artworks.Get(strconv.FormatInt(int64(idx), 10))
+	require(found, "artwork pool is empty.")
 	metadataURI, ok := v.(string)
 	require(ok, "corrupt artwork entry.")
 
@@ -124,6 +132,25 @@ func Mint(_ realm) string {
 	_, serr := nft.SetTokenURI(tid, TokenURI(metadataURI))
 	checkErr(serr)
 	return tid.String()
+}
+
+// pickArtwork chooses a pool entry using a sha256 hash of the chain
+// height, the caller and the current supply, then walks forward from that
+// point to the first entry that still exists (removed ones are skipped).
+func pickArtwork(caller address) int {
+	n := int(artworkCount)
+	h := sha256.Sum256([]byte(ufmt.Sprintf("%d|%s|%d", runtime.ChainHeight(), caller.String(), nft.TokenCount())))
+	start := 0
+	for _, b := range h {
+		start = (start*31 + int(b)) % n
+	}
+	for i := 0; i < n; i++ {
+		idx := (start+i)%n + 1
+		if artworks.Has(strconv.FormatInt(int64(idx), 10)) {
+			return idx
+		}
+	}
+	return 0
 }
 
 // --- write wrappers ---
@@ -178,11 +205,14 @@ func BalanceOf(owner address) (int64, error) { return nft.BalanceOf(owner) }
 func OwnerOf(tid string) (address, error)    { return nft.OwnerOf(TokenID(tid)) }
 func GetTokenURI(tid string) (string, error) { return nft.TokenURI(TokenID(tid)) }
 
-// ArtworkCount is how many artworks the owner has added.
+// ArtworkCount is how many artworks were ever added to the pool.
 func ArtworkCount() int64 { return artworkCount }
 
-// CurrentArtwork is the index Mint currently hands out (0 = none yet).
-func CurrentArtwork() int64 { return currentIdx }
+// PoolSize is how many artworks remain in the pool (removed ones excluded).
+func PoolSize() int { return artworks.Size() }
+
+// MintOpen reports whether minting is still open.
+func MintOpen() bool { return mintOpen }
 
 // GetArtworkURI returns the metadata URI of artwork idx.
 func GetArtworkURI(idx int64) (string, bool) {
@@ -204,10 +234,14 @@ func Render(path string) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("# Lord Ginge Genesis\n\n")
-	sb.WriteString(ufmt.Sprintf("GRC721 collection · **%d minted** · artwork #%d of %d live\n\n",
-		nft.TokenCount(), currentIdx, artworkCount))
-	sb.WriteString("Mint by calling `Mint()` — the current artwork goes straight to your own wallet. One per wallet.\n")
-	sb.WriteString("Only the owner wallet can add artwork (`AddArtwork`) or switch the drop (`SetCurrent`).\n\n")
+	state := "OPEN"
+	if !mintOpen {
+		state = "CLOSED FOREVER"
+	}
+	sb.WriteString(ufmt.Sprintf("GRC721 collection · mint **%s** · **%d minted** · %d artworks in the pool\n\n",
+		state, nft.TokenCount(), artworks.Size()))
+	sb.WriteString("Mint by calling `Mint()` while open — a random artwork from the pool goes straight to your wallet. One per wallet.\n")
+	sb.WriteString("Only the owner wallet can add artwork (`AddArtwork`), end minting (`EndMint`, permanent) or clean up (`RemoveArtwork`).\n\n")
 	var i int64
 	for i = 1; i <= nft.TokenCount(); i++ {
 		tid := strconv.FormatInt(i, 10)
