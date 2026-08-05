@@ -1,4 +1,4 @@
-// Package gingernft is the Lord Ginge Genesis GRC721 collection on gno.land.
+// Package gingernft is the Lord G's - Ginge Gnomie GRC721 collection on gno.land.
 //
 // Access model:
 //   - The collection has ONE owner wallet (the deployer, hardcoded below).
@@ -41,7 +41,7 @@ import (
 // ownerAddr is the only wallet allowed to manage the collection.
 var ownerAddr = address("g1n500fmqx8m6tgts85kmn43htegkv0eewkdm4lg")
 
-var nft = NewBasicNFT("Lord Ginge Genesis", "GINGE")
+var nft = NewBasicNFT("Lord G's - Ginge Gnomie", "GNOMIE")
 
 // artworks holds every artwork in the pool, keyed by its 1-based index
 // as a string. Mint picks one at random.
@@ -119,7 +119,7 @@ func Mint(_ realm) string {
 
 	bal, err := nft.BalanceOf(caller)
 	checkErr(err)
-	require(bal == 0, "this wallet already holds a Lord Ginge Genesis NFT (one per wallet).")
+	require(bal == 0, "this wallet already holds a Lord G's - Ginge Gnomie NFT (one per wallet).")
 
 	idx := pickArtwork(caller)
 	v, found := artworks.Get(strconv.FormatInt(int64(idx), 10))
@@ -233,7 +233,7 @@ func Render(path string) string {
 		return "404 — try the home page."
 	}
 	var sb strings.Builder
-	sb.WriteString("# Lord Ginge Genesis\n\n")
+	sb.WriteString("# Lord G's - Ginge Gnomie\n\n")
 	state := "OPEN"
 	if !mintOpen {
 		state = "CLOSED FOREVER"
