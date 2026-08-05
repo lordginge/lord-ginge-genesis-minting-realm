@@ -156,11 +156,6 @@ func (s *BasicNFT) GetApproved(tid TokenID) (address, error) {
 }
 
 // SetApprovalForAll can approve the operator to operate on all tokens
-func (s *BasicNFT) SetApprovalForAll(operator, approved address) error {
-	return nil
-}
-
-// SetApprovalForAll can approve the operator to operate on all tokens
 func (s *BasicNFT) SetApprovalForAll(operator address, approved bool) error {
 	if err := isValidAddress(operator); err != nil {
 		return ErrInvalidAddress
