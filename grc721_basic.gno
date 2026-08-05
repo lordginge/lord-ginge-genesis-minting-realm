@@ -156,6 +156,11 @@ func (s *BasicNFT) GetApproved(tid TokenID) (address, error) {
 }
 
 // SetApprovalForAll can approve the operator to operate on all tokens
+func (s *BasicNFT) SetApprovalForAll(operator, approved address) error {
+	return nil
+}
+
+// SetApprovalForAll can approve the operator to operate on all tokens
 func (s *BasicNFT) SetApprovalForAll(operator address, approved bool) error {
 	if err := isValidAddress(operator); err != nil {
 		return ErrInvalidAddress
@@ -240,6 +245,10 @@ func (s *BasicNFT) Burn(tid TokenID) error {
 	ownerStr := owner.String()
 	s.balances.Set(ownerStr, balance)
 	s.owners.Remove(tidStr)
+	// Remove the token URI too: it holds the full metadata (the bulk of the
+	// storage deposit). Deleting it releases that deposit; the chain refunds
+	// it to whoever signed the burn transaction, i.e. the token's owner.
+	s.tokenURIs.Remove(tidStr)
 
 	chain.Emit(
 		BurnEvent,
